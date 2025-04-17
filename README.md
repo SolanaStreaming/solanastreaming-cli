@@ -39,8 +39,8 @@ Once the simulation is finished, it will disconnect the client.
 **Notes**
 - `latestBlockSubscribe` is not available on the simulation server.
 - Swap filters do not function on the simulation server. You will receive all the data. If you need a subset, consider using the `reduce` command to pre-filter your dataset.
-- If gaps exist in your `data-dir` files (e.g. from purchasing different non-consecutive days of you have a file missing), the server will stream the data regardless without checking for gaps.
-- Since the archive data can be a large amount of data, the simulate command unzips each file only when it needs it to keep the memory and disk footprint down. It should also delete unzipped files after its finished so unnessisary disk smace is feed up.
+- If gaps exist in your `data-dir` files (e.g. from purchasing different non-consecutive days if you have a file missing), the server will stream the data regardless without checking for gaps.
+- Since the archive data can be a large amount of data, the simulate command unzips each file only when it needs it to keep the memory and disk footprint down. It should also delete unzipped files after its finished so unnessisary disk space is feed up.
 
 
 ## Download
