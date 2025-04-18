@@ -36,6 +36,7 @@ const (
 	MethodStartSimulation  = "startSimulation"
 	MethodNewPairSubscribe = "newPairSubscribe"
 	MethodSwapSubscribe    = "swapSubscribe"
+	tmpDir                 = "tmp"
 )
 
 func NewSimulateTask() *SimulateTask {
@@ -46,8 +47,8 @@ func NewSimulateTask() *SimulateTask {
 }
 
 func (o *SimulateTask) SetupParameters(cmd *cobra.Command) {
-	cmd.Flags().StringVarP(&o.params.fromDate, "from-date", "f", "", "Specify when to start the simulation from. Format: YYYY-MM-DD. If none specified, it will run with all the consecutive files in the data dir.")
-	cmd.Flags().UintVarP(&o.params.fromSlot, "from-slot", "s", 0, "Specify the slot to start the simulation from. The from-date param must also be provided")
+	// cmd.Flags().StringVarP(&o.params.fromDate, "from-date", "f", "", "Specify when to start the simulation from. Format: YYYY-MM-DD. If none specified, it will run with all the consecutive files in the data dir.")
+	// cmd.Flags().UintVarP(&o.params.fromSlot, "from-slot", "s", 0, "Specify the slot to start the simulation from. The from-date param must also be provided")
 	cmd.Flags().StringVarP(&o.params.dataDir, "data-dir", "d", "out", "The dir to get the data from for streaming")
 	cmd.Flags().UintVarP(&o.params.port, "port", "p", 8000, "The port the websocket server will bind to on localhost")
 }
@@ -157,6 +158,8 @@ func (o *SimulateTask) RunSimulation(ctx context.Context, simID int) error {
 	}
 	slot := uint64(0)
 	events := 0
+	os.RemoveAll(o.params.dataDir + "/" + tmpDir)
+	os.MkdirAll(o.params.dataDir+"/"+tmpDir, 0755)
 	for dataFileNum, v := range dataFiles {
 		logrus.Infof("running sim data from file (%d of %d) %s", dataFileNum+1, len(dataFiles), v)
 		// unzip file and write to disk to keep mem usage low
@@ -173,7 +176,7 @@ func (o *SimulateTask) RunSimulation(ctx context.Context, simID int) error {
 			if err != nil {
 				return err
 			}
-			tmpFile := fmt.Sprintf("%s.%d", f.Name, simID)
+			tmpFile := fmt.Sprintf("%s/%s.%d", tmpDir, f.Name, simID)
 			outFile, err := os.OpenFile(fmt.Sprintf("%s/%s", o.params.dataDir, tmpFile), os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0666)
 			if err != nil {
 				return err

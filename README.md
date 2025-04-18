@@ -41,7 +41,7 @@ Once the simulation is finished, it will disconnect the client.
 - Swap filters do not function on the simulation server. You will receive all the data. If you need a subset, consider using the `reduce` command to pre-filter your dataset.
 - If gaps exist in your `data-dir` files (e.g. from purchasing different non-consecutive days if you have a file missing), the server will stream the data regardless without checking for gaps.
 - Since the archive data can be a large amount of data, the simulate command unzips each file only when it needs it to keep the memory and disk footprint down. It should also delete unzipped files after its finished so unnessisary disk space is feed up.
-
+- For large time frames (over 150 hours), you may prefer to process the files yourself for better efficiency as performance starts to degrade at this point.
 
 ## Download
 The download command is used to help with downloading the multiple files available when purchasing archive data. The files can be large and numerous and this command manages the download and tracks the progress.

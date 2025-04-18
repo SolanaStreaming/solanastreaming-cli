@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -8,7 +9,6 @@ import (
 	"os"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/cavaliergopher/grab/v3"
@@ -58,7 +58,7 @@ type fileProgress struct {
 	TotalBytes int64
 	Downloaded int64
 	Percent    float64
-	Speed      float64 // kB/s
+	Speed      float64 // mB/s
 	BytesDelta int64   // (vytes per second)
 }
 
@@ -72,7 +72,7 @@ func NewDownloadTask() *DownloadTask {
 func (o *DownloadTask) SetupParameters(cmd *cobra.Command) {
 	cmd.Flags().StringVarP(&o.params.apiKey, "key", "k", "", "Your API key")
 	cmd.Flags().UintVarP(&o.params.orderID, "order-id", "r", 0, "the order id for all the files you want to download")
-	cmd.Flags().StringVarP(&o.params.fileName, "file-name", "n", "", "an individial archive file to download")
+	// cmd.Flags().StringVarP(&o.params.fileName, "file-name", "n", "", "an individial archive file to download")
 	cmd.Flags().StringVarP(&o.params.outputDir, "output-dir", "o", "out", "output directory")
 	cmd.Flags().UintVarP(&o.params.concurrency, "concurrency", "c", 1, "How many files to download concurrently. Tweak this depending on your network speed. Limit is currently 10")
 	cmd.Flags().BoolVarP(&o.params.isLocalEndpoint, "isLocal", "l", false, "(used for internal testing)")
@@ -89,9 +89,9 @@ func (o *DownloadTask) Execute(ctx context.Context) error {
 	if err := o.validateParams(); err != nil {
 		return err
 	}
+	os.MkdirAll(o.params.outputDir, 0755)
 	// // load manifest
-	logrus.Infof("loading manifest...")
-	err := o.getManifest(ctx)
+	currentFiles, err := o.getCurrentFiles(ctx)
 	if err != nil {
 		return err
 	}
@@ -106,19 +106,35 @@ func (o *DownloadTask) Execute(ctx context.Context) error {
 	// get list of files to download
 	logrus.Infof("generating archive file list for download...")
 	files := generateListOfArchiveFiles(o.order.ArchiveDataFrom, o.order.ArchiveDataTo)
-	logrus.Infof("downloading total of %d files...", len(files))
+
+	// remove already downloaded files
+	filesToDownload := []string{}
+	for _, file := range files {
+		if inSlice(currentFiles, file) {
+			continue
+		}
+		filesToDownload = append(filesToDownload, file)
+	}
+	if len(filesToDownload) == 0 {
+		logrus.Infof("all files already downloaded")
+		return nil
+	}
+	logrus.Infof("downloading total of %d files...", len(filesToDownload))
+
+	// get filesizes so we can calculate progress
+	totalBytesToDownload, err := o.getMetadata(ctx, filesToDownload)
+	if err != nil {
+		return err
+	}
 
 	// add one for ui thread
 	concurrency := semaphore.NewWeighted(int64(o.params.concurrency))
 
+	individualProgress := []fileProgress{}
 	finishReporting := make(chan struct{})
-	totalBytesDownloaded := uint64(0)
 	startedAt := time.Now()
 	go func() {
 		// todo: substitute this rough approximation with real values but need to download all filesizes first
-		const avgArchiveFilesize = 79009717 // 79 mb
-		totalFiles := len(files)
-		totalBytesToDownload := totalFiles * avgArchiveFilesize
 		for {
 			select {
 			case <-finishReporting:
@@ -126,10 +142,17 @@ func (o *DownloadTask) Execute(ctx context.Context) error {
 			default:
 			}
 			time.Sleep(time.Second)
+			totalBytesDownloaded := int64(0)
+			speed := float64(0)
+			for _, v := range individualProgress {
+				totalBytesDownloaded += v.Downloaded
+				speed += v.Speed
+			}
+
 			progress := (float64(totalBytesDownloaded) / float64(totalBytesToDownload)) * 100
 			since := time.Since(startedAt)
 			eta := time.Duration((float64(since) / progress) * (100 - progress))
-			logrus.Infof("Total Progress... %.2f%% complete. ETA: %s", progress, eta)
+			fmt.Printf("\rTotal Progress... %.2f%% complete. Current Speed: %.2f MB/s (%.2fMB/%.2fMB) ETA: %s", progress, speed, float64(totalBytesDownloaded)/1000000, float64(totalBytesToDownload)/1000000, eta)
 
 			// logrus.Infof("downloading %s: %.2f%% speed: %.2f KB/s", file, progress.Percent, progress.Speed)
 		}
@@ -137,49 +160,22 @@ func (o *DownloadTask) Execute(ctx context.Context) error {
 
 	// download files
 	var cmdErr error
-	for i, file := range files {
-		// if in manifest and complete then skip
-		o.manifest.Lock.Lock()
-		if status, ok := o.manifest.Files[file]; ok && status.Downloaded {
-			logrus.Infof("file found in manifest and already downloaded: %s", file)
-			o.manifest.Lock.Unlock()
-			continue
-		}
-		o.manifest.Lock.Unlock()
-
+	for i, file := range filesToDownload {
 		concurrency.Acquire(ctx, 1)
+		individualProgress = append(individualProgress, fileProgress{})
 		go func() {
 			defer concurrency.Release(1)
 
-			logrus.Infof("downloading %d of %d files...", i+1, len(files))
+			logrus.Debugf("downloading %d of %d files...", i+1, len(filesToDownload))
 			err = o.downloadFile(ctx, file, func(progress fileProgress) {
-				atomic.AddUint64(&totalBytesDownloaded, uint64(progress.Downloaded))
-				logrus.Infof("downloading %s: %.2f%% speed: %.2f KB/s", file, progress.Percent, progress.Speed)
+				individualProgress[i] = progress
+				// logrus.Infof("downloading %s: %.2f%% speed: %.2f KB/s", file, progress.Percent, progress.Speed)
 			})
 			if err != nil {
 				logrus.Errorf("error downloading file %s: %s", file, err)
-				o.manifest.Lock.Lock()
-				o.manifest.Files[file] = FileStatus{
-					FileName:   file,
-					Downloaded: false,
-					Error:      err.Error(),
-				}
-				o.manifest.Lock.Unlock()
-				err = o.updateManifest(ctx)
-				if err != nil {
-					logrus.Errorf("error updating manifest: %s", err)
-				}
 				cmdErr = err // propagate to fail at the end
 				return
 			}
-			o.manifest.Lock.Lock()
-			o.manifest.Files[file] = FileStatus{
-				FileName:   file,
-				Downloaded: true,
-				Error:      "",
-			}
-			o.manifest.Lock.Unlock()
-			err = o.updateManifest(ctx)
 
 		}()
 	}
@@ -219,6 +215,49 @@ func (o *DownloadTask) getOrder(ctx context.Context, orderID uint) error {
 	return json.NewDecoder(resp.Body).Decode(&o.order)
 }
 
+func (o *DownloadTask) getMetadata(ctx context.Context, files []string) (uint, error) {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	request := map[string]interface{}{
+		"files": files,
+	}
+	body, err := json.Marshal(request)
+	if err != nil {
+		return 0, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, o.params.apiEndpoint+"/archive/metadata", bytes.NewBuffer(body))
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Add("X-API-KEY", o.params.apiKey)
+
+	resp, err := o.httpClient.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+
+	response := []struct {
+		Swaps    uint `db:"swaps"`
+		NewPairs uint `db:"newpairs"`
+		Filesize uint `db:"filesize"`
+	}{}
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return 0, err
+	}
+
+	total := uint(0)
+	for _, v := range response {
+		total += v.Filesize
+	}
+
+	return total, nil
+}
+
 func (o *DownloadTask) downloadFile(ctx context.Context, fileName string, reportProgress func(fileProgress)) error {
 
 	fullfilename := fmt.Sprintf(o.params.apiEndpoint+"/archive/download/%s?token=%s", fileName, o.order.DownloadToken)
@@ -250,7 +289,7 @@ Loop:
 			TotalBytes: (resp.Size()),
 			Downloaded: (resp.BytesComplete()),
 			Percent:    100 * resp.Progress(),
-			Speed:      resp.BytesPerSecond() / 1024,
+			Speed:      resp.BytesPerSecond() / 1000000,
 			BytesDelta: int64(resp.BytesPerSecond()),
 		})
 	}
@@ -259,9 +298,18 @@ Loop:
 		return err
 	}
 
-	logrus.Infof("downloaded successfully %s", fileName)
+	logrus.Debugf("downloaded successfully %s", fileName)
 
 	return nil
+}
+
+func inSlice(slice []string, item string) bool {
+	for _, v := range slice {
+		if v == item {
+			return true
+		}
+	}
+	return false
 }
 
 func generateListOfArchiveFiles(from, to time.Time) []string {
@@ -272,45 +320,23 @@ func generateListOfArchiveFiles(from, to time.Time) []string {
 	return files
 }
 
-func (o *DownloadTask) getManifest(ctx context.Context) error {
-	// / set defaults
-	o.manifest.Lock = &sync.Mutex{}
-	o.manifest.Files = make(map[string]FileStatus)
-
-	// if file exists
-	err := os.MkdirAll(o.params.outputDir, 0755)
+func (o *DownloadTask) getCurrentFiles(ctx context.Context) ([]string, error) {
+	files, err := os.ReadDir(o.params.outputDir)
 	if err != nil {
-		return errors.Wrap(err, "failed to create output directory")
+		return nil, err
 	}
-	_, err = os.Stat(o.params.outputDir + "/" + manifestFileName)
-	if err != nil {
-		// will be created if it doesn't exist on update
-		if os.IsNotExist(err) {
-			return nil
+	alreadyDownloaded := []string{}
+	for _, v := range files {
+		if v.IsDir() {
+			continue
 		}
-		return err
+		// check extension
+		if len(v.Name()) < 4 || v.Name()[len(v.Name())-4:] != ".zip" {
+			continue
+		}
+		alreadyDownloaded = append(alreadyDownloaded, v.Name()[0:len(v.Name())-4])
 	}
-
-	f, err := os.OpenFile(o.params.outputDir+"/"+manifestFileName, os.O_CREATE|os.O_RDONLY, 0644)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	return json.NewDecoder(f).Decode(&o.manifest)
-}
-
-func (o *DownloadTask) updateManifest(ctx context.Context) error {
-	f, err := os.OpenFile(o.params.outputDir+"/"+manifestFileName, os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	err = json.NewEncoder(f).Encode(o.manifest)
-	if err != nil {
-		return err
-	}
-	return nil
+	return alreadyDownloaded, nil
 }
 
 func (o *DownloadTask) validateParams() error {

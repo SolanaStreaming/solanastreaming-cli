@@ -40,7 +40,7 @@ func (o *ReduceTask) SetupParameters(cmd *cobra.Command) {
 	cmd.Flags().StringVarP(&o.params.amms, "amm", "a", "", "Include any events with these AMMs. (Comma separated list)")
 	cmd.Flags().StringVarP(&o.params.baseTokenMints, "baseTokenMint", "b", "", "Include any events with these mints. (Comma separated list)")
 	cmd.Flags().StringVarP(&o.params.wallets, "wallet", "w", "", "Include any events with this wallets. (Comma separated list)")
-	cmd.Flags().StringVarP(&o.params.paramsFile, "params-file", "f", "", "JSON file with input params. See docs for format. Supply as many addresses as you want.")
+	// cmd.Flags().StringVarP(&o.params.paramsFile, "params-file", "f", "", "JSON file with input params. See docs for format. Supply as many addresses as you want.")
 	cmd.Flags().StringVarP(&o.params.dataInDir, "in-data-dir", "i", "out", "The dir to get the data from for streaming")
 	cmd.Flags().StringVarP(&o.params.dataOutDir, "out-data-dir", "o", "out-reduced", "The dir to get the data from for streaming")
 	cmd.Flags().IntVarP(&o.params.concurrency, "concurrency", "c", 10, "How many files to process at once. Adjust this depending on your CPU and memory. Default is 10.")
