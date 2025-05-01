@@ -49,9 +49,9 @@ type FileStatus struct {
 }
 
 type Order struct {
-	DownloadToken   string    `json:"DownloadToken"`
-	ArchiveDataTo   time.Time `json:"ArchiveDataTo"`
-	ArchiveDataFrom time.Time `json:"ArchiveDataFrom"`
+	DownloadToken   string    `json:"download_token"`
+	ArchiveDataTo   time.Time `json:"archive_data_to"`
+	ArchiveDataFrom time.Time `json:"archive_data_from"`
 }
 
 type fileProgress struct {
@@ -242,9 +242,9 @@ func (o *DownloadTask) getMetadata(ctx context.Context, files []string) (uint, e
 	}
 
 	response := []struct {
-		Swaps    uint `db:"swaps"`
-		NewPairs uint `db:"newpairs"`
-		Filesize uint `db:"filesize"`
+		Swaps    uint `json:"swaps"`
+		NewPairs uint `json:"pairs"`
+		Filesize uint `json:"size"`
 	}{}
 	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
 		return 0, err
